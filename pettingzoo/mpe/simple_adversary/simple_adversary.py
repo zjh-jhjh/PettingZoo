@@ -108,30 +108,46 @@ parallel_env = parallel_wrapper_fn(env)
 class Scenario(BaseScenario):
     def make_world(self, N=2):
         world = World()
-        # set any world properties first
+        # 设置通信维度（2D）
         world.dim_c = 2
-        num_agents = N + 1
-        world.num_agents = num_agents
+
+        # agent 总数 = adversary 数（固定 1）+ good agents 数（N）
         num_adversaries = 1
-        num_landmarks = num_agents - 1
-        # add agents
-        world.agents = [Agent() for i in range(num_agents)]
+        num_good_agents = N
+        num_agents = num_adversaries + num_good_agents
+        num_landmarks = num_good_agents  # 每个 good agent 分配一个目标 landmark
+
+        world.num_agents = num_agents
+
+        # 创建 agent 实体
+        world.agents = [Agent() for _ in range(num_agents)]
         for i, agent in enumerate(world.agents):
-            agent.adversary = True if i < num_adversaries else False
+            agent.adversary = (i < num_adversaries)
             base_name = "adversary" if agent.adversary else "agent"
-            base_index = i if i < num_adversaries else i - num_adversaries
+            base_index = i if agent.adversary else i - num_adversaries
             agent.name = f"{base_name}_{base_index}"
+
             agent.collide = False
             agent.silent = True
             agent.size = 0.15
-        # add landmarks
-        world.landmarks = [Landmark() for i in range(num_landmarks)]
+
+        # 创建 landmarks
+        world.landmarks = [Landmark() for _ in range(num_landmarks)]
         for i, landmark in enumerate(world.landmarks):
-            landmark.name = "landmark %d" % i
+            landmark.name = f"landmark_{i}"
             landmark.collide = False
             landmark.movable = False
             landmark.size = 0.08
+
+        # 👇 目标分配：将每个 good agent 绑定一个目标 landmark
+        good_agents = [a for a in world.agents if not a.adversary]
+        for i, agent in enumerate(good_agents):
+            # 目标 landmark：默认一一对应（agent_0 对 landmark_0）
+            agent.goal = world.landmarks[i]
+            agent.goal_id = i  # 可用于记录目标索引
+
         return world
+
 
     def reset_world(self, world, np_random):
         # random properties for agents

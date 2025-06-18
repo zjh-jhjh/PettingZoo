@@ -1,5 +1,5 @@
 import numpy as np
-
+from typing import Optional
 
 class EntityState:  # physical/external base state of all entities
     def __init__(self):
@@ -79,6 +79,10 @@ class Agent(Entity):  # properties of agent entities
         self.action = Action()
         # script behavior to execute
         self.action_callback = None
+        self.adversary = False   # ✅ 推荐：明确声明
+        # ✅ 显式添加类型提示
+        self.goal: Optional["Landmark"] = None         # ✅ 目标 landmark
+        self.goal_id = -1        # ✅ 目标编号（可用于 GAIL 或目标条件 embedding）
 
 
 class World:  # multi-agent world
@@ -99,6 +103,7 @@ class World:  # multi-agent world
         # contact response parameters
         self.contact_force = 1e2
         self.contact_margin = 1e-3
+        self.num_agents = 0      # ✅ 可选声明（不是必须，但可读性更强）
 
     # return all entities in the world
     @property
