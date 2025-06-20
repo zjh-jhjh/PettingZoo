@@ -1,15 +1,10 @@
 import torch
 import numpy as np
-from tqdm import trange
-import torch.nn as nn
-from collections import defaultdict
-import os
 import imageio.v2 as imageio
 from utils.env_utils import create_env
 from training.expert_policy import expert_policy
 from training.gail_module import collect_trajectory_data 
 
-OBS_DIM = 8  # 根据环境的实际观测维度更新
 
 class Trainer:
     def __init__(self, env, agents, buffer, gail_disc, batch_size, train_freq, gail_freq, max_steps, eval_freq, max_cycles, device, obs_dim, goal_dim, tensorboard_logdir=None,max_episodes=2000):
@@ -90,11 +85,12 @@ class Trainer:
                 # 与环境交互
                 next_obs_dict, rewards, terminations, truncations, _ = self.env.step(action_dict)
                 dones = [float(terminations[a]) for a in self.env.agents]
-                rew = [rewards[a] for a in self.env.agents]
+                rew = [rewards.get(agent, 0.0) for agent in self.env.agents]
                 episode_reward += np.array(rew)
 
                 # 存储 transition
                 max_obs_dim = max([obs_dict[a].shape[0] for a in self.env.agents])  # 找到最大的观测维度
+                episode_reward += np.array(rew)
 
                 obs_np = np.stack([
                     np.pad(obs_dict[a], (0, max_obs_dim - obs_dict[a].shape[0]), mode='constant')  # 填充到最大维度

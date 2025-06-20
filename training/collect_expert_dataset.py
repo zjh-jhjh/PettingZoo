@@ -105,6 +105,7 @@ def save_expert_dataset(env, agents, n_episodes=2000, save_path="datasets/maddpg
 if __name__ == "__main__":
     env = create_env(render=False)
     obs_dim = env.observation_space(env.agents[0]).shape[0]
+    print(f"👀 真实 obs 维度: {obs_dim}")
     act_dim = env.action_space(env.agents[0]).shape[0]
     goal_dim = 2
     agents = load_agents("checkpoints/maddpg", len(env.agents), obs_dim, goal_dim, act_dim)

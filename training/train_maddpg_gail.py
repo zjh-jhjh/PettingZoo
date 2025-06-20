@@ -18,7 +18,7 @@ from collections import defaultdict  # Ensure defaultdict is imported
 N_GOOD = 2
 N_AGENTS = N_GOOD + 1
 OBS_DIM = 8  # 修改为实际的观测维度
-GOAL_DIM = 0  # MPE环境不需要目标维度
+GOAL_DIM = 2  # MPE环境不需要目标维度
 ACT_DIM = 5
 LATENT_DIM = 64
 HIDDEN_DIM = 128
@@ -40,7 +40,8 @@ def main():
     env = create_env()
     env.reset()
     agent_ids = env.agents
-
+    obs_dim = env.observation_space(env.agents[0]).shape[0]
+    print(f"👀 真实 obs 维度: {obs_dim}")
     # Agent 实例
     agents = [
         MADDPGAgent(
@@ -65,7 +66,7 @@ def main():
     # Buffer & Trainer
     buffer = ReplayBuffer(
         buffer_size=100_000,
-        obs_dim=OBS_DIM,
+        obs_dim=OBS_DIM + GOAL_DIM,
         goal_dim=GOAL_DIM,
         act_dim=ACT_DIM,
         n_agents=N_AGENTS,
