@@ -159,6 +159,14 @@ class Trainer:
 
             print(f"✅ Episode {episode} done — steps so far: {step_count}")
 
+            # 每隔 eval_freq 步保存 agent 模型
+            if step_count % self.eval_freq == 0:
+                for i, agent in enumerate(self.agents):
+                    save_path = f"logs/checkpoints/maddpg/agent_{i}_actor.pth"
+                    torch.save(agent.actor.state_dict(), save_path)
+                print(f"💾 已保存 agent 策略至 checkpoints/maddpg/")
+
+
 
     def sample_agent_data(self):
         """从 buffer 中采样用于 GAIL 判别器训练"""

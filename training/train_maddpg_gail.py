@@ -29,7 +29,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--method", type=str, default="full", choices=["baseline", "gail", "encoder", "full"],
                         help="实验方法：baseline / gail / encoder / full")
-    parser.add_argument("--logdir", type=str, default="runs", help="TensorBoard 保存路径前缀")
+    parser.add_argument("--logdir", type=str, default="logs/runs", help="TensorBoard 保存路径前缀")
     return parser.parse_args()
 
 def main():
