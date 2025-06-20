@@ -63,7 +63,9 @@ simple_adversary_v3.env(N=2, max_cycles=25, continuous_actions=False, dynamic_re
 """
 
 import numpy as np
+import torch
 from gymnasium.utils import EzPickle
+from typing import Callable, Optional
 
 from pettingzoo.mpe._mpe_utils.core import Agent, Landmark, World
 from pettingzoo.mpe._mpe_utils.scenario import BaseScenario
@@ -77,7 +79,7 @@ class raw_env(SimpleEnv, EzPickle):
         N=2,
         max_cycles=25,
         continuous_actions=False,
-        render_mode=None,
+        render_mode=None, # "human"  # "rgb_array", "ansi"
         dynamic_rescaling=False,
     ):
         EzPickle.__init__(
@@ -106,6 +108,10 @@ parallel_env = parallel_wrapper_fn(env)
 
 
 class Scenario(BaseScenario):
+    def __init__(self):
+        self.use_gail = False
+        self.gail_reward_callback: Optional[Callable[[object, object], float]] = self._gail_reward # 实例化后赋值
+        self.gail_discriminator = None  # 实例化后赋值
     def make_world(self, N=2):
         world = World()
         # 设置通信维度（2D）
@@ -150,26 +156,37 @@ class Scenario(BaseScenario):
 
 
     def reset_world(self, world, np_random):
-        # random properties for agents
+        # 设置 adversary agent 的颜色（红色）
         world.agents[0].color = np.array([0.85, 0.35, 0.35])
+
+        # 设置 good agents 的颜色（蓝色）
         for i in range(1, world.num_agents):
             world.agents[i].color = np.array([0.35, 0.35, 0.85])
-        # random properties for landmarks
-        for i, landmark in enumerate(world.landmarks):
+
+        # 设置所有 landmark 的默认颜色（灰）
+        for landmark in world.landmarks:
             landmark.color = np.array([0.15, 0.15, 0.15])
-        # set goal landmark
-        goal = np_random.choice(world.landmarks)
-        goal.color = np.array([0.15, 0.65, 0.15])
-        for agent in world.agents:
-            agent.goal_a = goal
-        # set random initial states
+
+        # 为每个 good agent 分配一个唯一目标 landmark
+        good_agents = [a for a in world.agents if not a.adversary]
+        for i, agent in enumerate(good_agents):
+            agent.goal = world.landmarks[i]
+            agent.goal_id = i
+
+            # 为该 landmark 着色，标记被选为目标（绿色）
+            agent.goal.color = np.array([0.15, 0.65, 0.15])
+
+        # 初始化 agent 的位置和状态
         for agent in world.agents:
             agent.state.p_pos = np_random.uniform(-1, +1, world.dim_p)
             agent.state.p_vel = np.zeros(world.dim_p)
             agent.state.c = np.zeros(world.dim_c)
-        for i, landmark in enumerate(world.landmarks):
+
+        # 初始化 landmark 的位置和状态
+        for landmark in world.landmarks:
             landmark.state.p_pos = np_random.uniform(-1, +1, world.dim_p)
             landmark.state.p_vel = np.zeros(world.dim_p)
+
 
     def benchmark_data(self, agent, world):
         # returns data for benchmarking purposes
@@ -193,92 +210,103 @@ class Scenario(BaseScenario):
         return [agent for agent in world.agents if agent.adversary]
 
     def reward(self, agent, world):
-        # Agents are rewarded based on minimum agent distance to each landmark
+        # 使用 GAIL reward（如果启用）
+        if self.use_gail and self.gail_reward_callback is not None:
+            return self.gail_reward_callback(agent, world)
+
+        # 否则使用内建 reward 函数
         return (
             self.adversary_reward(agent, world)
             if agent.adversary
             else self.agent_reward(agent, world)
         )
 
+
     def agent_reward(self, agent, world):
-        # Rewarded based on how close any good agent is to the goal landmark, and how far the adversary is from it
+        # 若 agent 没有分配目标，默认返回 0
+        if agent.goal is None:
+            return 0.0
+
         shaped_reward = True
-        shaped_adv_reward = True
 
-        # Calculate negative reward for adversary
-        adversary_agents = self.adversaries(world)
-        if shaped_adv_reward:  # distance-based adversary reward
-            adv_rew = sum(
-                np.sqrt(np.sum(np.square(a.state.p_pos - a.goal_a.state.p_pos)))
-                for a in adversary_agents
-            )
-        else:  # proximity-based adversary reward (binary)
-            adv_rew = 0
-            for a in adversary_agents:
-                if (
-                    np.sqrt(np.sum(np.square(a.state.p_pos - a.goal_a.state.p_pos)))
-                    < 2 * a.goal_a.size
-                ):
-                    adv_rew -= 5
+        if shaped_reward:
+            # 奖励为负距离（越近越好）
+            dist = np.linalg.norm(agent.state.p_pos - agent.goal.state.p_pos)
+            return -dist
+        else:
+            # 二值奖励（是否进入 radius 范围）
+            if np.linalg.norm(agent.state.p_pos - agent.goal.state.p_pos) < agent.goal.size * 2:
+                return 5.0
+            else:
+                return 0.0
 
-        # Calculate positive reward for agents
-        good_agents = self.good_agents(world)
-        if shaped_reward:  # distance-based agent reward
-            pos_rew = -min(
-                np.sqrt(np.sum(np.square(a.state.p_pos - a.goal_a.state.p_pos)))
-                for a in good_agents
-            )
-        else:  # proximity-based agent reward (binary)
-            pos_rew = 0
-            if (
-                min(
-                    np.sqrt(np.sum(np.square(a.state.p_pos - a.goal_a.state.p_pos)))
-                    for a in good_agents
-                )
-                < 2 * agent.goal_a.size
-            ):
-                pos_rew += 5
-            pos_rew -= min(
-                np.sqrt(np.sum(np.square(a.state.p_pos - a.goal_a.state.p_pos)))
-                for a in good_agents
-            )
-        return pos_rew + adv_rew
 
     def adversary_reward(self, agent, world):
-        # Rewarded based on proximity to the goal landmark
         shaped_reward = True
-        if shaped_reward:  # distance-based reward
-            return -np.sqrt(
-                np.sum(np.square(agent.state.p_pos - agent.goal_a.state.p_pos))
-            )
-        else:  # proximity-based reward (binary)
-            adv_rew = 0
-            if (
-                np.sqrt(np.sum(np.square(agent.state.p_pos - agent.goal_a.state.p_pos)))
-                < 2 * agent.goal_a.size
-            ):
-                adv_rew += 5
-            return adv_rew
+        good_agents = self.good_agents(world)
+
+        if shaped_reward:
+            # 距离越小，reward 越高（负距离）
+            dists = [np.linalg.norm(agent.state.p_pos - a.state.p_pos) for a in good_agents]
+            return -min(dists)
+        else:
+            for a in good_agents:
+                if np.linalg.norm(agent.state.p_pos - a.state.p_pos) < agent.size + a.size:
+                    return 5.0
+            return 0.0
+
 
     def observation(self, agent, world):
-        # get positions of all entities in this agent's reference frame
-        entity_pos = []
-        for entity in world.landmarks:
-            entity_pos.append(entity.state.p_pos - agent.state.p_pos)
-        # entity colors
-        entity_color = []
-        for entity in world.landmarks:
-            entity_color.append(entity.color)
-        # communication of all other agents
-        other_pos = []
-        for other in world.agents:
-            if other is agent:
-                continue
-            other_pos.append(other.state.p_pos - agent.state.p_pos)
+        # 所有 landmark 的相对位置
+        entity_pos = [entity.state.p_pos - agent.state.p_pos for entity in world.landmarks]
 
+        # 所有其他 agent 的相对位置
+        other_pos = [
+            other.state.p_pos - agent.state.p_pos
+            for other in world.agents if other is not agent
+        ]
+
+        # 如果是 good agent，加入目标信息
         if not agent.adversary:
-            return np.concatenate(
-                [agent.goal_a.state.p_pos - agent.state.p_pos] + entity_pos + other_pos
-            )
-        else:
-            return np.concatenate(entity_pos + other_pos)
+            # 🧠 加入目标 landmark 的相对位置（目标导向输入）
+            goal_rel_pos = agent.goal.state.p_pos - agent.state.p_pos
+            return np.concatenate([goal_rel_pos] + entity_pos + other_pos)
+
+        # 对于 adversary，仍不提供目标信息
+        return np.concatenate(entity_pos + other_pos)
+
+        
+    # def gail_reward_callback(self, agent, world):
+    #     if self.gail_discriminator is None:
+    #         return 0.0  # fallback
+
+    #     # 获取当前 agent 的 obs & act
+    #     obs = self.observation(agent, world)  # reuse PettingZoo 定义的 obs
+    #     obs_tensor = torch.tensor(obs, dtype=torch.float32).unsqueeze(0)
+
+    #     # 获取 agent 的动作
+    #     act = getattr(agent.action, "u", None)
+    #     if act is None:
+    #         return 0.0
+    #     act_tensor = torch.tensor(act, dtype=torch.float32).unsqueeze(0)
+
+    #     # 使用判别器计算伪 reward
+    #     with torch.no_grad():
+    #         rew = self.gail_discriminator.compute_reward(obs_tensor, act_tensor)
+    #     return rew.item()
+    def _gail_reward(self, agent, world) -> float:
+        if self.gail_discriminator is None:
+            return 0.0
+
+        obs = self.observation(agent, world)
+        obs_tensor = torch.tensor(obs, dtype=torch.float32).unsqueeze(0)
+
+        act = getattr(agent.action, "u", None)
+        if act is None:
+            return 0.0
+        act_tensor = torch.tensor(act, dtype=torch.float32).unsqueeze(0)
+
+        with torch.no_grad():
+            rew = self.gail_discriminator.compute_reward(obs_tensor, act_tensor)
+        return rew.item()
+
