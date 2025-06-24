@@ -4,10 +4,10 @@ from tensorboard.backend.event_processing import event_accumulator
 
 # 各方法的 TensorBoard 路径
 log_paths = {
-    "A_MADDPG": "runs/maddpg_baseline",
-    "B_MADDPG+GAIL": "runs/maddpg_gail",
-    "C_MADDPG+Encoder": "runs/maddpg_encoder",
-    "D_Full": "runs/maddpg_full"
+    "A_MADDPG": "logs/runs/maddpg_baseline",
+    "B_MADDPG+GAIL": "logs/runs/maddpg_gail",
+    "C_MADDPG+Encoder": "logs/runs/maddpg_encoder",
+    "D_Full": "logs/runs/maddpg_full"
 }
 
 def extract_rewards(path, agent_id=0):

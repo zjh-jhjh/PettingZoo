@@ -17,7 +17,8 @@ from collections import defaultdict  # Ensure defaultdict is imported
 # 配置
 N_GOOD = 2
 N_AGENTS = N_GOOD + 1
-OBS_DIM = 8  # 修改为实际的观测维度
+
+
 GOAL_DIM = 2  # MPE环境不需要目标维度
 ACT_DIM = 5
 LATENT_DIM = 64
@@ -31,7 +32,6 @@ def parse_args():
                         help="实验方法：baseline / gail / encoder / full")
     parser.add_argument("--logdir", type=str, default="logs/runs", help="TensorBoard 保存路径前缀")
     return parser.parse_args()
-
 def main():
     args = parse_args()
     use_gail = args.method in ["gail", "full"]
@@ -39,38 +39,69 @@ def main():
 
     env = create_env()
     env.reset()
-    agent_ids = env.agents
-    obs_dim = env.observation_space(env.agents[0]).shape[0]
-    print(f"👀 真实 obs 维度: {obs_dim}")
-    # Agent 实例
-    agents = [
-        MADDPGAgent(
-            agent_id=i,
-            obs_dim=OBS_DIM,
-            goal_dim=GOAL_DIM,
-            act_dim=ACT_DIM,
-            n_agents=N_AGENTS,
-            latent_dim=LATENT_DIM,
-            hidden_dim=HIDDEN_DIM,
-            device=DEVICE,
-            use_encoder=use_encoder
+    n_agents = len(env.agents)
+    act_dim = env.action_space(env.agents[0]).shape[0]  # 动作维度从环境获取
+    latent_dim = 64
+    hidden_dim = 128
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # 分别记录每个 agent 的 obs_dim 和 goal_dim
+    obs_dims = {}
+    goal_dims = {}
+    for agent_id in env.agents:
+        obs_dim = env.observation_space(agent_id).shape[0]
+        obs_dims[agent_id] = obs_dim 
+        goal_dims[agent_id] = 2 if "agent" in agent_id else 0  # good agent 有目标，adversary 没有
+        print(f"[DEBUG] Agent {agent_id} obs_dim: {obs_dims[agent_id]}, goal_dim: {goal_dims[agent_id]}, act_dim: {act_dim}")
+    # 假设你已经有了 obs_dims 字典
+    total_obs_dim = sum([obs_dims[agent_id] for agent_id in env.agents])
+
+    # 初始化智能体
+    agents = []
+    for i, agent_id in enumerate(env.agents):
+        agent_obs_dim = obs_dims[agent_id]  # ✅
+        agent_goal_dim = goal_dims[agent_id]  # ✅
+        print(f"[Init Actor] Agent {agent_id} obs_dim={agent_obs_dim}, goal_dim={agent_goal_dim}")
+        agents.append(
+            MADDPGAgent(
+                agent_id=i,
+                obs_dim=agent_obs_dim,
+                goal_dim=agent_goal_dim,
+                act_dim=act_dim,
+                n_agents=n_agents,
+                latent_dim=latent_dim,
+                hidden_dim=hidden_dim,
+                device=device,
+                use_encoder=use_encoder,
+                total_obs_dim=total_obs_dim
+            )
         )
-        for i in range(N_AGENTS)
-    ]
+        # print(f"✅ Agent {agent_id}: obs_dim={obs_dims[agent_id]}, goal_dim={goal_dims[agent_id]}")
 
-    # 判别器模块（可选）
-    gail_disc = GAILDiscriminator(OBS_DIM, ACT_DIM, HIDDEN_DIM, device=DEVICE) if use_gail else None
+    for i, agent_id in enumerate(env.agents):
+        print(f"Agent {agent_id} obs dim: {env.observation_space(agent_id).shape[0]}")
 
-    import os  # Ensure the os module is imported
+    max_obs = max(obs_dims.values())
+    max_goal = max(goal_dims.values())
+    # 初始化 GAIL 判别器（统一维度：最大 obs + goal + act）
+    if use_gail:
+        gail_disc = GAILDiscriminator(
+            obs_dim=max_obs,
+            act_dim=act_dim,
+            hidden_dim=hidden_dim,
+            device=device
+        )
+    else:
+        gail_disc = None
 
-    # Buffer & Trainer
+    # 初始化经验回放池（也用最大 obs + goal 维度）
     buffer = ReplayBuffer(
         buffer_size=100_000,
-        obs_dim=OBS_DIM + GOAL_DIM,
-        goal_dim=GOAL_DIM,
-        act_dim=ACT_DIM,
-        n_agents=N_AGENTS,
-        device=DEVICE
+        obs_dim=max_obs + max_goal,
+        goal_dim=max_goal,
+        act_dim=act_dim,
+        n_agents=n_agents,
+        device=device
     )
 
     writer_dir = os.path.join(args.logdir, f"maddpg_{args.method}")
@@ -85,10 +116,10 @@ def main():
         max_steps=100_000,
         eval_freq=1000,
         max_cycles=25,
-        device=DEVICE,
-        obs_dim=OBS_DIM,
-        goal_dim=GOAL_DIM,
-        tensorboard_logdir=writer_dir  # 传递 TensorBoard 日志路径
+        device=device,
+        obs_dim=max_obs,
+        goal_dim=max_goal,
+        tensorboard_logdir=writer_dir
     )
 
     trainer.run()

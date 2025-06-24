@@ -13,14 +13,12 @@ class GoalConditionedActor(nn.Module):
             nn.Linear(latent_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, action_dim),
-            nn.Tanh()  # 输出范围 ∈ [-1, 1]
+            nn.Sigmoid()  # 输出范围 ∈ [-1, 1]
         )
 
     def forward(self, obs, goal):
-        """
-        obs: (B, obs_dim)
-        goal: (B, goal_dim)
-        return: (B, action_dim)
-        """
+        assert obs.shape[-1] + goal.shape[-1] == self.encoder.input_dim, \
+            f"❌ 维度不匹配：obs {obs.shape}, goal {goal.shape}, encoder expects {self.encoder.input_dim}"
         z = self.encoder(obs, goal)
         return self.policy_net(z)
+
