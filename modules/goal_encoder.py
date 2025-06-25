@@ -18,5 +18,8 @@ class GoalEncoder(nn.Module):
 
     def forward(self, obs, goal):
         x = torch.cat([obs, goal], dim=-1)
+        expected_dim = self.net[0].in_features
+        assert x.shape[-1] == expected_dim, f"❌ Encoder输入维度不匹配，当前为 {x.shape[-1]}，期望为 {expected_dim}"
         return self.net(x)
+
 

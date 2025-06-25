@@ -44,6 +44,8 @@ def main():
     latent_dim = 64
     hidden_dim = 128
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(env.step.__module__)
+    print(env.step.__qualname__)
 
     # 分别记录每个 agent 的 obs_dim 和 goal_dim
     obs_dims = {}
@@ -55,7 +57,8 @@ def main():
         print(f"[DEBUG] Agent {agent_id} obs_dim: {obs_dims[agent_id]}, goal_dim: {goal_dims[agent_id]}, act_dim: {act_dim}")
     # 假设你已经有了 obs_dims 字典
     total_obs_dim = sum([obs_dims[agent_id] for agent_id in env.agents])
-
+    all_obs_dims = [obs_dims[agent_id] for agent_id in env.agents]
+    all_goal_dims = [goal_dims[agent_id] for agent_id in env.agents]
     # 初始化智能体
     agents = []
     for i, agent_id in enumerate(env.agents):
@@ -73,7 +76,9 @@ def main():
                 hidden_dim=hidden_dim,
                 device=device,
                 use_encoder=use_encoder,
-                total_obs_dim=total_obs_dim
+                total_obs_dim=total_obs_dim,
+                all_obs_dims=all_obs_dims,
+                all_goal_dims=all_goal_dims,
             )
         )
         # print(f"✅ Agent {agent_id}: obs_dim={obs_dims[agent_id]}, goal_dim={goal_dims[agent_id]}")

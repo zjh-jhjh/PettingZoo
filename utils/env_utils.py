@@ -1,6 +1,6 @@
 from pettingzoo.mpe import simple_adversary_v3
 
-def create_env(render=False, n_good=2, max_cycles=25):
+def create_env(render=False, n_good=2, max_cycles=125):
     """
     创建 PettingZoo 环境
     Args:

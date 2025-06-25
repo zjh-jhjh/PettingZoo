@@ -4,6 +4,12 @@ import os
 # 添加项目根目录到 Python 模块搜索路径
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(project_root)
+
+from modules.actor import GoalConditionedActor
+
+# 添加项目根目录到 Python 模块搜索路径
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(project_root)
 # updated_collect_expert_dataset.py
 # collect_expert_dataset.py
 import os
@@ -19,62 +25,94 @@ def create_env(render=False):
     env = simple_adversary_v3.parallel_env(
         continuous_actions=True,
         max_cycles=125,
-        render_mode="rgb_array" if render else None
+        render_mode="rgb_array" if render else None  # ✅ 添加 render_mode
     )
     env.reset()
-    env.max_cycles = 125
     return env
 
+
 # ===== 加载训练好的策略 =====
-def load_agents(model_dir, n_agents, obs_dim, goal_dim, act_dim, device="cpu"):
-    agents = []
-    for i in range(n_agents):
+# 修改 load_agents 函数
+def load_agents(model_dir, env, use_encoder, device="cpu"):
+    agents = {}
+    obs_dims = {agent_id: env.observation_space(agent_id).shape[0] for agent_id in env.agents}
+    goal_dims = {agent_id: 2 if "agent" in agent_id else 0 for agent_id in env.agents}
+    act_dim = env.action_space(env.agents[0]).shape[0]
+    obs_dims_list = [env.observation_space(agent_id).shape[0] for agent_id in env.agents]
+    goal_dims_list = [2 if "agent" in agent_id else 0 for agent_id in env.agents]
+
+    for i, agent_id in enumerate(env.agents):
+        obs_dim = obs_dims[agent_id]
+        goal_dim = goal_dims[agent_id]
         agent = MADDPGAgent(
-            agent_id=i,
+            agent_id=agent_id,
             obs_dim=obs_dim,
             goal_dim=goal_dim,
             act_dim=act_dim,
-            n_agents=n_agents,
-            device=device
+            n_agents=len(env.agents),
+            device=device,
+            use_encoder=use_encoder,
+            total_obs_dim=None,  # 可选填
+            all_obs_dims=obs_dims_list,
+            all_goal_dims=goal_dims_list,
         )
         actor_path = os.path.join(model_dir, f"agent_{i}_actor.pth")
         agent.actor.load_state_dict(torch.load(actor_path, map_location=device))
         agent.actor.eval()
-        agents.append(agent)
+        agents[agent_id] = agent
     return agents
 
+
+
+
+
+
 # ===== 使用 actor 生成动作 =====
-def expert_policy(agent_obs, agent_id, agents, goal_dim):
+def expert_policy(agent_obs, agent_id, agents):
     obs_tensor = torch.tensor(agent_obs, dtype=torch.float32).unsqueeze(0)
-    goal_tensor = torch.zeros(goal_dim, dtype=torch.float32).unsqueeze(0)
-    with torch.no_grad():
-        action = agents[agent_id].actor(obs_tensor, goal_tensor).squeeze(0).cpu().numpy()
+    agent = agents[agent_id]
+
+    # 判断是否是 GoalConditionedActor
+    if isinstance(agent.actor, GoalConditionedActor):
+        goal_tensor = torch.zeros(agent.goal_dim, dtype=torch.float32).unsqueeze(0)
+        action = agent.actor(obs_tensor, goal_tensor).squeeze(0).detach().cpu().numpy()
+    else:
+        action = agent.actor(obs_tensor).squeeze(0).cpu().numpy()
+
     return action
+
+
 
 # ===== 数据采集函数 =====
 def save_expert_dataset(env, agents, n_episodes=2000, save_path="datasets/maddpg_expert.npz"):
     print(f"\n🚀 采集中: 使用训练好的 MADDPG 策略作为专家，共 {n_episodes} episodes")
     obs_list, act_list = [], []
-
     for _ in trange(n_episodes):
         obs_dict, _ = env.reset()
         trajectory_obs, trajectory_acts = [], []
+        reward_dicts = []
 
-        for _ in range(env.max_cycles):
+        for _ in range(env.unwrapped.max_cycles):
             actions = {}
-            for i, agent_id in enumerate(env.agents):
-                act_dim = env.action_space(agent_id).shape[0]
-                goal_dim = 2  # 目标维度，如无目标用零向量
-                action = expert_policy(obs_dict[agent_id], i, agents, goal_dim)
-                actions[agent_id] = action
+            for agent_id in env.agents:  # 👈 每一步重新获取存活 agent
+                if agent_id in obs_dict:
+                    # goal_dim = agents[agent_id].goal_dim
+                    action = expert_policy(obs_dict[agent_id], agent_id, agents)
+                    actions[agent_id] = action
 
             next_obs, rewards, terms, truncs, _ = env.step(actions)
             trajectory_obs.append(obs_dict)
             trajectory_acts.append(actions)
+            reward_dicts.append(rewards)
             obs_dict = next_obs
 
             if all(terms.values()) or all(truncs.values()):
                 break
+
+        # ✨ 新增：过滤低质量轨迹
+        if not is_high_reward_episode(reward_dicts, threshold= -1000):
+            print("🚫 跳过低 reward 轨迹")
+            continue
 
         try:
             obs_episode = []
@@ -101,14 +139,45 @@ def save_expert_dataset(env, agents, n_episodes=2000, save_path="datasets/maddpg
     print(f"✅ 专家轨迹已保存至: {save_path}")
     print(f"📊 数据维度: obs {obs_all.shape}, act {act_all.shape}")
 
+# ==== 过滤episode ====
+def is_goal_success_episode(goal_hits, min_success_rate=0.5):
+    """
+    判断 episode 的目标达成率是否高于 min_success_rate
+    goal_hits: List[Dict[agent_id -> bool]]，每步是否达成目标（可自定义规则判断）
+    min_success_rate: 成功率阈值（0~1）
+    """
+    if not goal_hits:
+        return False
+
+    total = len(goal_hits) * len(goal_hits[0])  # 步数 × agent 数
+    success = sum([int(hit) for step in goal_hits for hit in step.values()])
+    success_rate = success / total
+    return success_rate >= min_success_rate
+
+def is_high_reward_episode(reward_dicts, threshold=0.0):
+    """
+    判断 episode 的总 reward 是否高于阈值
+    reward_dicts: List[Dict[agent_id -> reward]]，每步的 reward 字典
+    threshold: 总 reward 的阈值
+    """
+    total_reward = 0.0
+    for step_rewards in reward_dicts:
+        total_reward += sum(step_rewards.values())
+    return total_reward > threshold
+
+
 # ===== 主入口 =====
 if __name__ == "__main__":
-    env = create_env(render=False)
-    obs_dim = env.observation_space(env.agents[0]).shape[0]
-    print(f"👀 真实 obs 维度: {obs_dim}")
-    act_dim = env.action_space(env.agents[0]).shape[0]
-    goal_dim = 2
-    agents = load_agents("checkpoints/maddpg", len(env.agents), obs_dim, goal_dim, act_dim)
+    env = create_env(render=True)
+    use_encoder = True  # 或根据方法动态判断
+    agents = load_agents("/Users/mvbj0057/PettingZoo/logs/checkpoints/maddpg", env, use_encoder)
+
+
     save_expert_dataset(env, agents, n_episodes=200, save_path="datasets/maddpg_expert.npz")
+
     from visualize import render_expert_gif
-    render_expert_gif(env, expert_policy, gif_path="results/expert_behavior.gif")
+    from functools import partial
+
+    wrapped_policy_fn = lambda obs, agent_id: expert_policy(obs, agent_id, agents)
+    render_expert_gif(env, wrapped_policy_fn, gif_path="results/expert_behavior.gif")
+

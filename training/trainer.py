@@ -89,8 +89,11 @@ class Trainer:
                     action = agent.select_action(obs[i], goal_input, explore=True)
                     action_dict[self.env.agents[i]] = action.detach().cpu().numpy()
 
+                # print("🤖 当前 agents:", self.env.agents)
+                # print("输出动作", action_dict)
                 # 与环境交互
                 next_obs_dict, rewards, terminations, truncations, _ = self.env.step(action_dict)
+                print("🎯 输出 reward:", rewards)
                 dones = [float(terminations[a]) for a in self.env.agents]
                 rew = [rewards.get(agent, 0.0) for agent in self.env.agents]
                 if len(rew) == 0:
@@ -193,7 +196,7 @@ class Trainer:
                 for i, agent in enumerate(self.agents):
                     save_path = f"logs/checkpoints/maddpg/agent_{i}_actor.pth"
                     torch.save(agent.actor.state_dict(), save_path)
-                print(f"💾 已保存 agent 策略至 checkpoints/maddpg/")
+                    print(f"💾 已保存 agent 策略至 logs/checkpoints/maddpg/agent_{i}_actor.pth")
 
 
 
@@ -275,7 +278,10 @@ class Trainer:
                 for agent_id in env_render.agents:
                     i = self.agent_name_to_index[agent_id]
                     obs_tensor = obs[agent_id]
-                    goal_tensor = goal[agent_id]
+
+                    # 每个 agent 单独处理 goal_dim
+                    goal_dim = self.agents[i].goal_dim if hasattr(self.agents[i], "goal_dim") else 0
+                    goal_tensor = torch.zeros(goal_dim, dtype=torch.float32)
 
                     action = self.agents[i].select_action(obs_tensor, goal_tensor, explore=False)
                     action_dict[agent_id] = action.detach().cpu().numpy()
