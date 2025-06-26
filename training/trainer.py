@@ -1,15 +1,18 @@
 import torch
 import copy
+import os
 import numpy as np
 import imageio.v2 as imageio
 from utils.env_utils import create_env
 from training.expert_policy import expert_policy
-from training.gail_module import collect_trajectory_data 
+from training.gail_module import collect_trajectory_data
+from modules.actor import GoalConditionedActor
 
 
 class Trainer:
-    def __init__(self, env, agents, buffer, gail_disc, batch_size, train_freq, gail_freq, max_steps, eval_freq, max_cycles, device, obs_dim, goal_dim, tensorboard_logdir=None,max_episodes=2000):
+    def __init__(self, env, agents, buffer, gail_disc, batch_size, train_freq, gail_freq, max_steps, eval_freq, max_cycles, device, obs_dim, goal_dim,method="baseline", tensorboard_logdir=None,max_episodes=2000):
         self.env = env
+        self.method = method
         self.agents = agents
         self.buffer = buffer
         self.gail_disc = gail_disc
@@ -75,25 +78,47 @@ class Trainer:
             episode_reward = np.zeros(self.n_agents)
 
             for t in range(self.max_cycles):
-                obs = [torch.tensor(obs_dict[agent][:self.obs_dim], dtype=torch.float32) for agent in self.env.agents]
-                goal = [torch.tensor(obs_dict[agent][-self.goal_dim:], dtype=torch.float32) for agent in self.env.agents]
+                obs = []
+                goal = []
+                for i, agent_id in enumerate(self.env.agents):
+                    agent_obs_dim = self.agents[i].obs_dim
+                    agent_goal_dim = self.agents[i].goal_dim
+                    obs_vec = obs_dict[agent_id]
+                    # print(f"agent_id: {agent_id}, obs_vec: {obs_vec}, agent_obs_dim:{agent_obs_dim}, goal_vec: {agent_goal_dim}")
+                    if agent_id.startswith('adversary'):
+                        # 对于 adversary，使用全部 8 维观察
+                        obs_i = torch.tensor(obs_vec, dtype=torch.float32)
+                        goal_i = torch.tensor([])  # 空目标
+                    else:
+                        # 对于 agent，使用 8 维观察拼接 2 维目标，总共 10 维
+                        obs_part = torch.tensor(obs_vec[:agent_obs_dim], dtype=torch.float32)
+                        goal_part = torch.tensor(obs_vec[-agent_goal_dim:], dtype=torch.float32)
+                        if self.method == "baseline" or "gail":
+                            obs_i = torch.tensor(obs_vec[:agent_obs_dim], dtype=torch.float32)
+                            goal_i = torch.tensor([])
+                        else:
+                            obs_i = torch.cat((obs_part, goal_part))
+                            goal_i = goal_part
+
+                    # print(f"改后---agent_id:{agent_id}，obs_i: {obs_i}, goal_i: {goal_i}")
+
+                    obs.append(obs_i)
+                    goal.append(goal_i)
 
                 # 策略选择动作（带探索）
                 action_dict = {}
                 for i, agent in enumerate(self.agents):
-                    if agent.goal_dim > 0:
-                        goal_input = goal[i]
-                    else:
-                        goal_input = None
-
-                    action = agent.select_action(obs[i], goal_input, explore=True)
+                    agent_obs = obs[i].to(self.device)
+                    goal_input = goal[i].to(self.device) if isinstance(agent.actor, GoalConditionedActor) else None
+                    # print(f"[DEBUG] Agent {i} obs shape: {obs[i].shape}, goal shape: {goal[i].shape}")
+                    action = agent.select_action(agent_obs, goal_input, explore=True)
                     action_dict[self.env.agents[i]] = action.detach().cpu().numpy()
 
                 # print("🤖 当前 agents:", self.env.agents)
                 # print("输出动作", action_dict)
                 # 与环境交互
                 next_obs_dict, rewards, terminations, truncations, _ = self.env.step(action_dict)
-                print("🎯 输出 reward:", rewards)
+                # print("🎯 输出 reward:", rewards)
                 dones = [float(terminations[a]) for a in self.env.agents]
                 rew = [rewards.get(agent, 0.0) for agent in self.env.agents]
                 if len(rew) == 0:
@@ -122,8 +147,13 @@ class Trainer:
                     next_obs_vec = next_obs_dict[agent_id]
 
                     # 分割 obs 与 goal
-                    obs_part = obs_vec[:self.obs_dim]
-                    goal_part = obs_vec[-self.goal_dim:] if self.goal_dim > 0 else np.array([])
+                    agent_obs_dim = self.agents[i].obs_dim
+                    agent_goal_dim = self.agents[i].goal_dim
+
+                    obs_part = obs_vec[:agent_obs_dim]
+                    goal_part = obs_vec[-agent_goal_dim:] if agent_goal_dim > 0 else np.array([])
+                    # print(
+                    #     f"[CHECK] Agent {agent_id} full obs_vec.shape: {len(obs_vec)}, expect obs_dim={agent_obs_dim}, goal_dim={agent_goal_dim}")
 
                     next_obs_part = next_obs_vec[:self.obs_dim]
                     next_goal_part = next_obs_vec[-self.goal_dim:] if self.goal_dim > 0 else np.array([])
@@ -189,16 +219,16 @@ class Trainer:
                     if self.writer is not None:
                         self.writer.add_scalar("eval/total_episode_reward", mean_episode_reward, step_count)
 
-            print(f"✅ Episode {episode} done — steps so far: {step_count}")
+            # print(f"✅ Episode {episode} done — steps so far: {step_count}")
 
             # 每隔 eval_freq 步保存 agent 模型
             if step_count % self.eval_freq == 0:
+                save_dir = os.path.join("logs/checkpoints", self.method)
+                os.makedirs(save_dir, exist_ok=True)
                 for i, agent in enumerate(self.agents):
-                    save_path = f"logs/checkpoints/maddpg/agent_{i}_actor.pth"
+                    save_path = os.path.join(save_dir, f"agent_{i}_actor.pth")
                     torch.save(agent.actor.state_dict(), save_path)
-                    print(f"💾 已保存 agent 策略至 logs/checkpoints/maddpg/agent_{i}_actor.pth")
-
-
+                    print(f"💾 已保存 agent 策略至 {save_path}")
 
     def sample_agent_data(self):
         """从 buffer 中采样用于 GAIL 判别器训练"""

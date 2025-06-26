@@ -37,7 +37,7 @@ def main():
     use_gail = args.method in ["gail", "full"]
     use_encoder = args.method in ["encoder", "full"]
 
-    env = create_env()
+    env = create_env(use_encoder=(args.method in ["encoder", "full"]))
     env.reset()
     n_agents = len(env.agents)
     act_dim = env.action_space(env.agents[0]).shape[0]  # 动作维度从环境获取
@@ -54,7 +54,7 @@ def main():
         obs_dim = env.observation_space(agent_id).shape[0]
         obs_dims[agent_id] = obs_dim 
         goal_dims[agent_id] = 2 if "agent" in agent_id else 0  # good agent 有目标，adversary 没有
-        print(f"[DEBUG] Agent {agent_id} obs_dim: {obs_dims[agent_id]}, goal_dim: {goal_dims[agent_id]}, act_dim: {act_dim}")
+        # print(f"[DEBUG] Agent {agent_id} obs_dim: {obs_dims[agent_id]}, goal_dim: {goal_dims[agent_id]}, act_dim: {act_dim}")
     # 假设你已经有了 obs_dims 字典
     total_obs_dim = sum([obs_dims[agent_id] for agent_id in env.agents])
     all_obs_dims = [obs_dims[agent_id] for agent_id in env.agents]
@@ -124,7 +124,8 @@ def main():
         device=device,
         obs_dim=max_obs,
         goal_dim=max_goal,
-        tensorboard_logdir=writer_dir
+        tensorboard_logdir=writer_dir,
+        method=args.method
     )
 
     trainer.run()

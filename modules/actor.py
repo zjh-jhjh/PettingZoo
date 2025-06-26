@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from modules.goal_encoder import GoalEncoder
 
-
+# encoder模式
 class GoalConditionedActor(nn.Module):
     def __init__(self, obs_dim, goal_dim, action_dim, latent_dim=64, hidden_dim=128):
         super().__init__()

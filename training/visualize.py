@@ -5,15 +5,19 @@ def render_expert_gif(env, policy_fn, gif_path="results/expert_behavior.gif"):
     frames = []
     obs_dict, _ = env.reset()
 
-    for _ in range(env.unwrapped.max_cycles):
-        act_dim = env.action_space(env.agents[0]).shape[0]
-        actions = {agent: policy_fn(obs_dict[agent], act_dim) for agent in env.agents}
+    for _ in range(env.unwrapped.max_cycles):  # ✅ 推荐使用 env.unwrapped
+        # ✅ 确保只对已有 obs 的 agent 调用 policy
+        actions = {
+            agent_id: policy_fn(obs_dict[agent_id], agent_id)
+            for agent_id in env.agents
+            if agent_id in obs_dict
+        }
 
         obs_next, rewards, terminations, truncations, _ = env.step(actions)
         obs_dict = obs_next
 
         frame = env.render()
-        if frame is not None:  # 过滤掉无效帧
+        if frame is not None:
             frames.append(frame)
 
         if all(terminations.values()) or all(truncations.values()):

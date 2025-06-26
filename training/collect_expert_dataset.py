@@ -35,13 +35,13 @@ def create_env(render=False):
 # 修改 load_agents 函数
 def load_agents(model_dir, env, use_encoder, device="cpu"):
     agents = {}
-    obs_dims = {agent_id: env.observation_space(agent_id).shape[0] for agent_id in env.agents}
-    goal_dims = {agent_id: 2 if "agent" in agent_id else 0 for agent_id in env.agents}
-    act_dim = env.action_space(env.agents[0]).shape[0]
-    obs_dims_list = [env.observation_space(agent_id).shape[0] for agent_id in env.agents]
-    goal_dims_list = [2 if "agent" in agent_id else 0 for agent_id in env.agents]
+    obs_dims = {agent_id: env.observation_space(agent_id).shape[0] for agent_id in env.possible_agents}
+    goal_dims = {agent_id: 2 if "agent" in agent_id else 0 for agent_id in env.possible_agents}
+    act_dim = env.action_space(env.possible_agents[0]).shape[0]
+    obs_dims_list = [obs_dims[a] for a in env.possible_agents]
+    goal_dims_list = [goal_dims[a] for a in env.possible_agents]
 
-    for i, agent_id in enumerate(env.agents):
+    for i, agent_id in enumerate(env.possible_agents):
         obs_dim = obs_dims[agent_id]
         goal_dim = goal_dims[agent_id]
         agent = MADDPGAgent(
@@ -49,18 +49,16 @@ def load_agents(model_dir, env, use_encoder, device="cpu"):
             obs_dim=obs_dim,
             goal_dim=goal_dim,
             act_dim=act_dim,
-            n_agents=len(env.agents),
+            n_agents=len(env.possible_agents),
             device=device,
             use_encoder=use_encoder,
-            total_obs_dim=None,  # 可选填
+            total_obs_dim=None,
             all_obs_dims=obs_dims_list,
             all_goal_dims=goal_dims_list,
         )
         actor_path = os.path.join(model_dir, f"agent_{i}_actor.pth")
         agent.actor.load_state_dict(torch.load(actor_path, map_location=device))
         agent.actor.eval()
-        print("[DEBUG] agents keys:", agents.keys())
-        print("[DEBUG] incoming agent_id:", agent_id)
         agents[agent_id] = agent
     return agents
 
@@ -82,7 +80,7 @@ def expert_policy(agent_obs, agent_id , agents):
         goal_tensor = torch.zeros(agent.goal_dim, dtype=torch.float32).unsqueeze(0)
         action = agent.actor(obs_tensor, goal_tensor).squeeze(0).detach().cpu().numpy()
     else:
-        action = agent.actor(obs_tensor).squeeze(0).cpu().numpy()
+        action = agent.actor(obs_tensor).squeeze(0).cpu().detach().numpy()
 
     return action
 
@@ -114,10 +112,10 @@ def save_expert_dataset(env, agents, n_episodes=2000, save_path="datasets/maddpg
             if all(terms.values()) or all(truncs.values()):
                 break
 
-        # # ✨ 新增：过滤低质量轨迹
-        # if not is_high_reward_episode(reward_dicts, threshold= -1000):
-        #     print("🚫 跳过低 reward 轨迹")
-        #     continue
+        # ✨ 新增：过滤低质量轨迹
+        if not is_high_reward_episode(reward_dicts, threshold= -500):
+            print("🚫 跳过低 reward 轨迹")
+            continue
 
         try:
             obs_episode = []
@@ -174,8 +172,8 @@ def is_high_reward_episode(reward_dicts, threshold=0.0):
 # ===== 主入口 =====
 if __name__ == "__main__":
     env = create_env(render=True)
-    use_encoder = True  # 或根据方法动态判断
-    agents = load_agents("/Users/mvbj0057/PettingZoo/logs/checkpoints/maddpg", env, use_encoder)
+    use_encoder = False  # 或根据方法动态判断
+    agents = load_agents("/Users/mvbj0057/PettingZoo/logs/checkpoints/gail", env, use_encoder)
 
 
     save_expert_dataset(env, agents, n_episodes=200, save_path="datasets/maddpg_expert.npz")

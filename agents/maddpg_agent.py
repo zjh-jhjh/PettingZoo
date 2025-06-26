@@ -25,7 +25,7 @@ class MADDPGAgent:
         self.all_obs_dims = all_obs_dims
         self.all_goal_dims = all_goal_dims
 
-        if use_encoder :
+        if use_encoder and goal_dim > 0:
             self.actor = GoalConditionedActor(obs_dim, goal_dim, act_dim, latent_dim, hidden_dim).to(device)
             self.critic = CentralizedCritic(all_obs_dims, all_goal_dims, act_dim, latent_dim, hidden_dim).to(device)
         else:
@@ -39,18 +39,24 @@ class MADDPGAgent:
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=lr_critic)
         print(f"🧠 [Agent {agent_id}] actor type: {type(self.actor)}")
 
-    def select_action(self, obs, goal, explore=False, noise_std=0.1):
+    def select_action(self, obs, goal=None, explore=False, noise_std=0.1):
         self.actor.eval()
         obs = obs.unsqueeze(0).to(self.device)
 
-        if self.use_encoder:
-            # 自动构造空 goal（而不是报错）
-            if goal is None:
-                goal = torch.zeros(0).unsqueeze(0).to(self.device)
-            else:
-                goal = goal.unsqueeze(0).to(self.device)
+        # actor_type = type(self.actor).__name__
+        # print(
+        #     f"[select_action] Agent {self.agent_id} using actor: {self.actor.__class__.__name__}, obs shape: {obs.shape}, goal: {goal.shape if goal is not None else None}")
+
+
+        if isinstance(self.actor, GoalConditionedActor):
+            assert goal is not None, f"❌ Agent {self.agent_id} 需要 goal，但收到 None"
+            goal = goal.unsqueeze(0).to(self.device)
             action = self.actor(obs, goal).squeeze(0)
         else:
+            # 防止错误：RawActor 不应接收 goal
+            # if goal is None:
+            #
+            # print(f"agent's obs:{obs}, goal:{goal}")
             action = self.actor(obs).squeeze(0)
 
         if explore:
@@ -97,7 +103,8 @@ class MADDPGAgent:
                     next_action = agent.actor_target(obs_next_i[i])
                 next_actions.append(next_action)
 
-            if self.use_encoder:
+            # if self.use_encoder:
+            if isinstance(self.critic_target, CentralizedCritic):
                 q_next = self.critic_target(obs_next_i, goals_next_i, next_actions)
             else:
                 q_next = self.critic_target(obs_next_i, next_actions)
@@ -105,7 +112,8 @@ class MADDPGAgent:
             q_target = rewards_i + self.gamma * (1 - dones_i) * q_next
 
         # === 当前 Q 值 ===
-        if self.use_encoder:
+        # if self.use_encoder:
+        if isinstance(self.critic_target, CentralizedCritic):
             q_current = self.critic(obs_i, goals_i, actions_i)
         else:
             q_current = self.critic(obs_i, actions_i)
@@ -129,7 +137,8 @@ class MADDPGAgent:
             else:
                 actions_pred.append(actions_i[i].detach())
 
-        if self.use_encoder:
+        # if self.use_encoder:
+        if isinstance(self.critic_target, CentralizedCritic):
             actor_loss = -self.critic(obs_i, goals_i, actions_pred).mean()
         else:
             actor_loss = -self.critic(obs_i, actions_pred).mean()

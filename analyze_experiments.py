@@ -4,18 +4,26 @@ from tensorboard.backend.event_processing import event_accumulator
 
 # 各方法的 TensorBoard 路径
 log_paths = {
-    "A_MADDPG": "logs/runs/maddpg_baseline",
-    "B_MADDPG+GAIL": "logs/runs/maddpg_gail",
-    "C_MADDPG+Encoder": "logs/runs/maddpg_encoder",
-    "D_Full": "logs/runs/maddpg_full"
+    "A_MADDPG": os.path.abspath("logs/runs/maddpg_baseline"),
+    "B_MADDPG+GAIL": os.path.abspath("logs/runs/maddpg_gail"),
+    "C_MADDPG+Encoder": os.path.abspath("logs/runs/maddpg_encoder"),
+    "D_Full": os.path.abspath("logs/runs/maddpg_full")
 }
+
 
 def extract_rewards(path, agent_id=0):
     ea = event_accumulator.EventAccumulator(path)
     ea.Reload()
     tag = f"eval/reward_agent_{agent_id}"
+
+    # 打印所有可用的标签
+    print(f"Available tags for {path}:")
+    print(ea.Tags())
+
     if tag not in ea.Tags()["scalars"]:
+        print(f"⚠️ Tag '{tag}' not found in {path}")
         return [], []
+
     steps = []
     rewards = []
     for e in ea.Scalars(tag):
@@ -25,14 +33,24 @@ def extract_rewards(path, agent_id=0):
 
 def plot_rewards(log_paths):
     plt.figure(figsize=(10, 6))
+    data_plotted = False
+
     for label, path in log_paths.items():
         if not os.path.exists(path):
             print(f"⚠️ Skip missing path: {path}")
             continue
+
         steps, rewards = extract_rewards(path)
         if not steps:
+            print(f"⚠️ No data extracted for: {label}")
             continue
+
         plt.plot(steps, rewards, label=label)
+        data_plotted = True
+
+    if not data_plotted:
+        print("No data was plotted. Check your log paths and data.")
+        return
 
     plt.title("Average Episode Reward per Method")
     plt.xlabel("Training Step")
@@ -42,6 +60,7 @@ def plot_rewards(log_paths):
     plt.tight_layout()
     plt.savefig("results/reward_comparison.png")
     plt.show()
+
 
 if __name__ == "__main__":
     plot_rewards(log_paths)

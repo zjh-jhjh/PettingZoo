@@ -110,8 +110,10 @@ parallel_env = parallel_wrapper_fn(env)
 class Scenario(BaseScenario):
     def __init__(self):
         self.use_gail = False
+        self.use_encoder_obs = False  # ✅ 是否使用 encoder 模式（控制 obs 是否包含 goal）
         self.gail_reward_callback: Optional[Callable[[object, object], float]] = self._gail_reward # 实例化后赋值
         self.gail_discriminator = None  # 实例化后赋值
+    # 构建世界，包括 agent、landmark 的数量与基本属性	✅ 目标分配逻辑在此设定，正确但若未传递给 obs，会影响行为学习
     def make_world(self, N=2):
         world = World()
         # 设置通信维度（2D）
@@ -154,7 +156,7 @@ class Scenario(BaseScenario):
 
         return world
 
-
+    # 每次 reset 初始化 agent 和 landmark 的位置、状态和颜色	✅ 如果目标 landmark 没有正确分配，会影响行为目标
     def reset_world(self, world, np_random):
         # 设置 adversary agent 的颜色（红色）
         world.agents[0].color = np.array([0.85, 0.35, 0.35])
@@ -255,7 +257,7 @@ class Scenario(BaseScenario):
                     return 5.0
             return 0.0
 
-
+    # 返回每个 agent 的观测，必须包含目标信息（goal）	✅ ❗这是最关键一环，不包含 goal_rel_pos 就不能学目标导向策略
     def observation(self, agent, world):
         # 所有 landmark 的相对位置
         entity_pos = [entity.state.p_pos - agent.state.p_pos for entity in world.landmarks]
@@ -266,16 +268,19 @@ class Scenario(BaseScenario):
             for other in world.agents if other is not agent
         ]
 
-        # 如果是 good agent，加入目标信息
         if not agent.adversary:
-            # 🧠 加入目标 landmark 的相对位置（目标导向输入）
             goal_rel_pos = agent.goal.state.p_pos - agent.state.p_pos
-            return np.concatenate([goal_rel_pos] + entity_pos + other_pos)
+            if self.use_encoder_obs:
+                # 👇 encoder 模式：不包含 goal 信息
+                return np.concatenate(entity_pos + other_pos)
+            else:
+                # 👇 raw 模式：包含 goal 信息（拼入 obs）
+                return np.concatenate([goal_rel_pos] + entity_pos + other_pos)
 
-        # 对于 adversary，仍不提供目标信息
+        # 对 adversary 一律不提供 goal
         return np.concatenate(entity_pos + other_pos)
 
-        
+    # 若启用 GAIL，则替代 reward 函数	✅ 若 GAILDiscriminator 训练不充分，可能干扰目标导向学习
     # def gail_reward_callback(self, agent, world):
     #     if self.gail_discriminator is None:
     #         return 0.0  # fallback
