@@ -92,3 +92,14 @@ To cite this project in publication, please use
 - Project Manager: [David Gerard](https://github.com/David-GERARD) - `david.gerard.23@ucl.ac.uk`
 - Maintainer: [Albert Han](https://github.com/yjhan96) - `yjhan96@gmail.com`.
 - Maintenance for this project is also contributed by the broader Farama team: [farama.org/team](https://farama.org/team).
+
+### bash command
+```
+python training/train_maddpg_gail.py --method baseline 
+python training/train_maddpg_gail.py --method encoder
+python training/train_maddpg_gail.py --method gail  
+python training/train_maddpg_gail.py --method full
+
+python training/collect_expert_dataset.py  #生成专家数据，并可视化成.gif
+python analyze_experiments.py  #策略对比
+```
