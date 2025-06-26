@@ -5,7 +5,7 @@ def render_expert_gif(env, policy_fn, gif_path="results/expert_behavior.gif"):
     frames = []
     obs_dict, _ = env.reset()
 
-    for _ in range(env.max_cycles):
+    for _ in range(env.unwrapped.max_cycles):
         act_dim = env.action_space(env.agents[0]).shape[0]
         actions = {agent: policy_fn(obs_dict[agent], act_dim) for agent in env.agents}
 

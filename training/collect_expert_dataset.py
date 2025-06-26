@@ -59,6 +59,8 @@ def load_agents(model_dir, env, use_encoder, device="cpu"):
         actor_path = os.path.join(model_dir, f"agent_{i}_actor.pth")
         agent.actor.load_state_dict(torch.load(actor_path, map_location=device))
         agent.actor.eval()
+        print("[DEBUG] agents keys:", agents.keys())
+        print("[DEBUG] incoming agent_id:", agent_id)
         agents[agent_id] = agent
     return agents
 
@@ -68,8 +70,11 @@ def load_agents(model_dir, env, use_encoder, device="cpu"):
 
 
 # ===== 使用 actor 生成动作 =====
-def expert_policy(agent_obs, agent_id, agents):
+def expert_policy(agent_obs, agent_id , agents):
     obs_tensor = torch.tensor(agent_obs, dtype=torch.float32).unsqueeze(0)
+    if isinstance(agent_id, int):
+        agent_id = f"agent_{agent_id}" if f"agent_{agent_id}" in agents else f"adversary_{agent_id}"
+    # print(f"[DEBUG] expert_policy got agent_id = {agent_id}, type = {type(agent_id)}")
     agent = agents[agent_id]
 
     # 判断是否是 GoalConditionedActor
@@ -109,10 +114,10 @@ def save_expert_dataset(env, agents, n_episodes=2000, save_path="datasets/maddpg
             if all(terms.values()) or all(truncs.values()):
                 break
 
-        # ✨ 新增：过滤低质量轨迹
-        if not is_high_reward_episode(reward_dicts, threshold= -1000):
-            print("🚫 跳过低 reward 轨迹")
-            continue
+        # # ✨ 新增：过滤低质量轨迹
+        # if not is_high_reward_episode(reward_dicts, threshold= -1000):
+        #     print("🚫 跳过低 reward 轨迹")
+        #     continue
 
         try:
             obs_episode = []
