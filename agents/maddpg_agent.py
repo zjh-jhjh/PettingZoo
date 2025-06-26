@@ -45,7 +45,7 @@ class MADDPGAgent:
 
         # actor_type = type(self.actor).__name__
         # print(
-        #     f"[select_action] Agent {self.agent_id} using actor: {self.actor.__class__.__name__}, obs shape: {obs.shape}, goal: {goal.shape if goal is not None else None}")
+        #    f"[select_action] Agent {self.agent_id} using actor: {self.actor.__class__.__name__}, obs shape: {obs.shape}, goal: {goal.shape if goal is not None else None}")
 
 
         if isinstance(self.actor, GoalConditionedActor):
@@ -54,9 +54,6 @@ class MADDPGAgent:
             action = self.actor(obs, goal).squeeze(0)
         else:
             # 防止错误：RawActor 不应接收 goal
-            # if goal is None:
-            #
-            # print(f"agent's obs:{obs}, goal:{goal}")
             action = self.actor(obs).squeeze(0)
 
         if explore:

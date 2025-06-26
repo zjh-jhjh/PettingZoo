@@ -84,7 +84,6 @@ class Trainer:
                     agent_obs_dim = self.agents[i].obs_dim
                     agent_goal_dim = self.agents[i].goal_dim
                     obs_vec = obs_dict[agent_id]
-                    # print(f"agent_id: {agent_id}, obs_vec: {obs_vec}, agent_obs_dim:{agent_obs_dim}, goal_vec: {agent_goal_dim}")
                     if agent_id.startswith('adversary'):
                         # 对于 adversary，使用全部 8 维观察
                         obs_i = torch.tensor(obs_vec, dtype=torch.float32)
@@ -93,15 +92,16 @@ class Trainer:
                         # 对于 agent，使用 8 维观察拼接 2 维目标，总共 10 维
                         obs_part = torch.tensor(obs_vec[:agent_obs_dim], dtype=torch.float32)
                         goal_part = torch.tensor(obs_vec[-agent_goal_dim:], dtype=torch.float32)
-                        if self.method == "baseline" or "gail":
+                        # print(
+                        #     f"agent_id: {agent_id}, obs_vec: {obs_vec}, agent_obs:{obs_part}, goal: {goal_part}")
+                        if self.method == "baseline" or self.method == "gail":
+                            # print(f"method: {self.method}")
                             obs_i = torch.tensor(obs_vec[:agent_obs_dim], dtype=torch.float32)
                             goal_i = torch.tensor([])
                         else:
                             obs_i = torch.cat((obs_part, goal_part))
                             goal_i = goal_part
-
-                    # print(f"改后---agent_id:{agent_id}，obs_i: {obs_i}, goal_i: {goal_i}")
-
+                            # print(f"改后---agent_id:{agent_id}，obs_i: {obs_i}, goal_i: {goal_i}")
                     obs.append(obs_i)
                     goal.append(goal_i)
 
