@@ -1,3 +1,4 @@
+import argparse
 import sys
 import os
 
@@ -30,6 +31,16 @@ def create_env(render=False):
     env.reset()
     return env
 
+# ===== 参数解析 =====
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--method", type=str, default="encoder", choices=["baseline", "gail", "encoder", "full"],
+                        help="选择训练方法（决定加载哪种模型结构）")
+    parser.add_argument("--model_dir", type=str, default=None,
+                        help="模型路径（若为空则自动根据方法选择）")
+    parser.add_argument("--save_path", type=str, default="datasets/maddpg_expert.npz")
+    parser.add_argument("--n_episodes", type=int, default=200)
+    return parser.parse_args()
 
 # ===== 加载训练好的策略 =====
 # 修改 load_agents 函数
@@ -171,12 +182,17 @@ def is_high_reward_episode(reward_dicts, threshold=0.0):
 
 # ===== 主入口 =====
 if __name__ == "__main__":
+    args = parse_args()
+    use_encoder = args.method in ["encoder", "full"]
     env = create_env(render=True)
-    use_encoder = False  # 或根据方法动态判断
-    agents = load_agents("/Users/mvbj0057/PettingZoo/logs/checkpoints/gail", env, use_encoder)
+    # 根据方法自动推断模型路径
+    if args.model_dir is None:
+        model_dir = f"logs/checkpoints/{args.method}"
+    else:
+        model_dir = args.model_dir
+    agents = load_agents(model_dir, env, use_encoder)
 
-
-    save_expert_dataset(env, agents, n_episodes=200, save_path="datasets/maddpg_expert.npz")
+    save_expert_dataset(env, agents, n_episodes=args.n_episodes, save_path=args.save_path)
 
     from visualize import render_expert_gif
     from functools import partial
