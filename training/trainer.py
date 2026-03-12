@@ -1,8 +1,13 @@
 import torch
 import copy
 import os
+import sys
 import numpy as np
 import imageio.v2 as imageio
+
+# Add parent directory to path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from utils.env_utils import create_env
 from training.expert_policy import expert_policy
 from training.gail_module import collect_trajectory_data
@@ -30,6 +35,8 @@ class Trainer:
         self.gail = None  # Initialize gail attribute
         self.actor = None  # Initialize actor attribute
         self.agent_name_to_index = {agent_id: i for i, agent_id in enumerate(env.possible_agents)}
+
+
 
         # 初始化 TensorBoard 日志记录器（如果提供了路径）
         if tensorboard_logdir:
@@ -72,6 +79,7 @@ class Trainer:
                 )
 
     def run(self):
+        self.use_encoder_obs = getattr(self.env.unwrapped, "use_encoder_obs", False)
         step_count = 0
         for episode in range(self.max_episodes):
             obs_dict, _ = self.env.reset()
@@ -90,31 +98,56 @@ class Trainer:
                         goal_i = torch.tensor([])  # 空目标
                     else:
                         # 对于 agent，使用 8 维观察拼接 2 维目标，总共 10 维
-                        obs_part = torch.tensor(obs_vec[:agent_obs_dim], dtype=torch.float32)
-                        goal_part = torch.tensor(obs_vec[-agent_goal_dim:], dtype=torch.float32)
-                        # print(
-                        #     f"agent_id: {agent_id}, obs_vec: {obs_vec}, agent_obs:{obs_part}, goal: {goal_part}")
-                        if self.method == "baseline" or self.method == "gail":
-                            # print(f"method: {self.method}")
-                            obs_i = torch.tensor(obs_vec[:agent_obs_dim], dtype=torch.float32)
-                            goal_i = torch.tensor([])
+                        if self.method in ["baseline", "gail"]:
+                            # ✅ baseline 模式：goal 已经拼进 obs，直接取前 obs_dim 部分即可
+                            obs_i = torch.tensor(obs_vec[:self.obs_dim], dtype=torch.float32)
+                            goal_i = torch.tensor([], dtype=torch.float32)  # 空 goal（不输入 encoder）
+
+                        elif self.method in ["encoder", "full"]:
+                            # ✅ encoder 模式：goal 不拼进 obs，从 agent.goal 取（即 env 内部目标位置）
+                            agent_goal_pos = torch.tensor(self.env.unwrapped.world.agents[i].goal.state.p_pos, dtype=torch.float32)
+                            obs_i = torch.tensor(obs_vec, dtype=torch.float32)  # 仅状态部分
+                            goal_i = agent_goal_pos
+
                         else:
-                            obs_i = torch.cat((obs_part, goal_part))
-                            goal_i = goal_part
-                            # print(f"改后---agent_id:{agent_id}，obs_i: {obs_i}, goal_i: {goal_i}")
+                            raise ValueError(f"Unknown training method: {self.method}")
+
                     obs.append(obs_i)
                     goal.append(goal_i)
 
                 # 策略选择动作（带探索）
+                # === 策略选择动作（带探索）===
                 action_dict = {}
                 for i, agent in enumerate(self.agents):
-                    agent_obs = obs[i].to(self.device)
-                    goal_input = goal[i].to(self.device) if isinstance(agent.actor, GoalConditionedActor) else None
-                    # print(f"[DEBUG] Agent {i} obs shape: {obs[i].shape}, goal shape: {goal[i].shape}")
-                    action = agent.select_action(agent_obs, goal_input, explore=True)
-                    action_dict[self.env.agents[i]] = action.detach().cpu().numpy()
+                    agent_name = self.env.agents[i]
+                    raw_obs = obs_dict[agent_name]
 
-                # print("🤖 当前 agents:", self.env.agents)
+                    # === 关键逻辑：根据模式决定如何拆分 ===
+                    if agent.use_encoder:
+                        # ✅ encoder 模式：obs 是完整环境观测（12维），goal 单独取最后 2维
+                        agent_obs = raw_obs[:agent.obs_dim]  # 取前面的观察部分
+                        goal_input = self.env.unwrapped.world.agents[i].goal.state.p_pos - self.env.unwrapped.world.agents[i].state.p_pos  # 由环境获取
+                    else:
+                        # ✅ baseline 模式：goal 已拼入 obs（10维），直接作为输入
+                        agent_obs = raw_obs
+                        goal_input = None
+
+                    # === 转 tensor ===
+                    agent_obs = torch.tensor(agent_obs, dtype=torch.float32, device=self.device).unsqueeze(0)
+                    goal_input = (
+                        torch.tensor(goal_input, dtype=torch.float32, device=self.device).unsqueeze(0)
+                        if goal_input is not None else None
+                    )
+
+                    # === 策略选择动作 ===
+                    action = agent.select_action(agent_obs, goal_input, explore=True)
+                    # 确保动作形状正确 (5,) 而不是 (1, 5)
+                    action_dict[agent_name] = action.detach().cpu().numpy().flatten()
+
+
+
+
+    # print("🤖 当前 agents:", self.env.agents)
                 # print("输出动作", action_dict)
                 # 与环境交互
                 next_obs_dict, rewards, terminations, truncations, _ = self.env.step(action_dict)
@@ -209,15 +242,27 @@ class Trainer:
                     if self.writer is not None:
                         self.writer.add_scalar("loss/gail", gail_loss, step_count)
 
+            # ✅ 记录每个episode的奖励（用于绘制训练收敛曲线）
+            if hasattr(self, "writer") and self.writer is not None:
+                mean_episode_reward = episode_reward.mean()
+                # 使用episode数作为x轴，而不是step_count
+                self.writer.add_scalar("train/episode_reward", mean_episode_reward, episode)
+                # 记录每个智能体的奖励
+                for i in range(self.n_agents):
+                    self.writer.add_scalar(f"train/agent_{i}_reward", episode_reward[i], episode)
+
             # ✅ 策略评估与可视化
             if episode % self.eval_freq == 0:
                 self.env_step_count = step_count
-                self.evaluate(save_gif=True, gif_path=f"results/episode_{episode}.gif")
+                avg_reward, avg_hit = self.evaluate(save_gif=True, gif_path=f"results/episode_{episode}.gif")
 
-                if hasattr(self, "writer"):
-                    mean_episode_reward = episode_reward.mean()
-                    if self.writer is not None:
-                        self.writer.add_scalar("eval/total_episode_reward", mean_episode_reward, step_count)
+                if hasattr(self, "writer") and self.writer is not None:
+                    mean_eval_reward = avg_reward.mean()
+                    self.writer.add_scalar("eval/total_episode_reward", mean_eval_reward, episode)
+                    # 记录每个智能体的评估奖励
+                    for i in range(self.n_agents):
+                        self.writer.add_scalar(f"eval/agent_{i}_reward", avg_reward[i], episode)
+                        self.writer.add_scalar(f"eval/agent_{i}_goal_hit_rate", avg_hit[i], episode)
 
             # print(f"✅ Episode {episode} done — steps so far: {step_count}")
 
@@ -242,14 +287,34 @@ class Trainer:
         return obs_all, act_all
 
     #对 obs + goal 向量进行右侧 padding
-    def pad_to_fixed_length(self, x: np.ndarray, target_dim: int) -> np.ndarray:
-        if x.shape[0] == target_dim:
-            return x
-        elif x.shape[0] < target_dim:
-            padding = np.zeros(target_dim - x.shape[0], dtype=np.float32)
-            return np.concatenate([x, padding])
+    def pad_to_fixed_length(self, x: np.ndarray, target_dim: int, pad_value: float = 0.0) -> np.ndarray:
+        """
+        将输入向量 x 补齐（或截断）到固定长度 target_dim。
+        - baseline/gail 模式：x 可能已经是 obs+goal 拼接后的完整输入；
+        - encoder/full 模式：x 可能仅包含 obs，因此需要 padding。
+        """
+        # 确保输入是一维向量
+        if x.ndim > 1:
+            x = x.flatten()
+
+        x_len = x.shape[0]
+
+        if x_len == target_dim:
+            # ✅ 已经匹配，直接返回
+            return x.astype(np.float32)
+
+        elif x_len < target_dim:
+            # ✅ 长度不足，右侧补零（或 pad_value）
+            padding = np.full(target_dim - x_len, pad_value, dtype=np.float32)
+            x_padded = np.concatenate([x, padding])
+            # print(f"[Pad] 输入长度 {x_len} < {target_dim}，右侧补 {target_dim - x_len} 维。")
+            return x_padded
+
         else:
-            raise ValueError(f"Input too long: {x.shape[0]} > {target_dim}")
+            # ⚠️ 长度超出时截断（防止 shape mismatch）
+            print(f"[Warning] 输入长度 {x_len} > 目标维度 {target_dim}，已截断。")
+            return x[:target_dim].astype(np.float32)
+
 
 
     def sample_expert_data(self):
@@ -311,7 +376,10 @@ class Trainer:
 
                     # 每个 agent 单独处理 goal_dim
                     goal_dim = self.agents[i].goal_dim if hasattr(self.agents[i], "goal_dim") else 0
-                    goal_tensor = torch.zeros(goal_dim, dtype=torch.float32)
+                    if self.method in ["encoder", "full"]:
+                        goal_tensor = torch.tensor(env_render.unwrapped.world.agents[i].goal.state.p_pos, dtype=torch.float32)
+                    else:
+                        goal_tensor = torch.tensor(obs_dict[agent_id][-self.goal_dim:], dtype=torch.float32)
 
                     action = self.agents[i].select_action(obs_tensor, goal_tensor, explore=False)
                     action_dict[agent_id] = action.detach().cpu().numpy()
@@ -324,8 +392,14 @@ class Trainer:
                     break
 
                 for i, a in enumerate(env_render.agents):
-                    if np.linalg.norm(obs_dict[a][-self.goal_dim:]) < 0.1:
-                        episode_goal_hit[i] = 1
+                    if self.method == "baseline":
+                        # baseline 模式下，goal 已经拼进 obs，直接判断是否接近目标
+                        goal_rel = obs_dict[a][:2]
+                    else:
+                        # encoder 模式：goal 单独存储在 obs 尾部
+                        goal_rel = obs_dict[a][-self.goal_dim:]
+                    if np.linalg.norm(goal_rel) < 0.1:
+                        episode_goal_hit[i] = 1.0
 
                 obs_dict = obs_next
                 if all(dones.values()) or all(truncs.values()):

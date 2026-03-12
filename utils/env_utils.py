@@ -1,7 +1,7 @@
-from pettingzoo.mpe import simple_adversary_v3
+from pettingzoo.mpe.multi_agents.env import parallel_env  # 修改导入路径
 
 def create_env(render=False, use_encoder=False):
-    env = simple_adversary_v3.parallel_env(
+    env = parallel_env(
         continuous_actions=True,
         max_cycles=125,
         render_mode="rgb_array" if render else None

@@ -56,6 +56,8 @@ class Entity:  # properties and state of physical world entity
 class Landmark(Entity):  # properties of landmark entities
     def __init__(self):
         super().__init__()
+        self.color = np.zeros(3, dtype=np.float32)  # 明确初始化为 numpy 数组
+        self.found = False  # 新增属性，表示是否被找到
 
 
 class Agent(Entity):  # properties of agent entities
@@ -89,7 +91,8 @@ class World:  # multi-agent world
     def __init__(self):
         # list of agents and entities (can change at execution-time!)
         self.agents = []
-        self.landmarks = []
+        self.survivors = []
+        self.landmarks = []  # 添加 landmarks 属性
         # communication channel dimensionality
         self.dim_c = 0
         # position dimensionality
@@ -171,8 +174,18 @@ class World:  # multi-agent world
     # integrate physical state
     def integrate_state(self, p_force):
         for i, entity in enumerate(self.entities):
+            # 严格检查：如果是 survivor（有 found 属性），则完全跳过位置和速度更新
+            if hasattr(entity, 'found'):
+                # 确保 survivor 的速度始终为零
+                entity.state.p_vel = np.zeros_like(entity.state.p_vel)
+                # 不更新位置
+                continue
+            
+            # 不可移动实体也跳过
             if not entity.movable:
                 continue
+                
+            # 更新可移动实体的位置和速度
             entity.state.p_pos += entity.state.p_vel * self.dt
             entity.state.p_vel = entity.state.p_vel * (1 - self.damping)
             if p_force[i] is not None:

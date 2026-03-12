@@ -18,12 +18,12 @@ import numpy as np
 from tqdm import trange
 import torch
 
-from pettingzoo.mpe import simple_adversary_v3
+from pettingzoo.mpe.multi_agentsenv import parallel_env
 from agents.maddpg_agent import MADDPGAgent
 
 # ===== 创建环境 =====
 def create_env(render=False):
-    env = simple_adversary_v3.parallel_env(
+    env = parallel_env(
         continuous_actions=True,
         max_cycles=125,
         render_mode="rgb_array" if render else None  # ✅ 添加 render_mode

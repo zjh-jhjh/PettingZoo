@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*
 import sys
 import os
 
@@ -16,7 +17,7 @@ from collections import defaultdict  # Ensure defaultdict is imported
 
 # 配置
 N_GOOD = 2
-N_AGENTS = N_GOOD + 1
+#N_AGENTS = N_GOOD + 1
 
 
 GOAL_DIM = 2  # MPE环境不需要目标维度
@@ -30,6 +31,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--method", type=str, default="full", choices=["baseline", "gail", "encoder", "full"],
                         help="实验方法：baseline / gail / encoder / full")
+    parser.add_argument("--episodes", type=int, default=10000, help="训练的总回合数")
     parser.add_argument("--logdir", type=str, default="logs/runs", help="TensorBoard 保存路径前缀")
     return parser.parse_args()
 def main():
@@ -37,39 +39,47 @@ def main():
     use_gail = args.method in ["gail", "full"]
     use_encoder = args.method in ["encoder", "full"]
 
-    env = create_env(use_encoder=(args.method in ["encoder", "full"]))
+    # === 1️⃣ 创建环境 ===
+    env = create_env(use_encoder=use_encoder)
     env.reset()
-    n_agents = len(env.agents)
-    act_dim = env.action_space(env.agents[0]).shape[0]  # 动作维度从环境获取
+    agent_ids = list(env.agents)  # ✅ 用这个固定顺序
+    print("环境中的 agents:", agent_ids)
+
+    n_agents = len(agent_ids)
+    act_dim = env.action_space(agent_ids[0]).shape[0]
     latent_dim = 64
     hidden_dim = 128
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(env.step.__module__)
-    print(env.step.__qualname__)
-
-    # 分别记录每个 agent 的 obs_dim 和 goal_dim
     obs_dims = {}
     goal_dims = {}
-    for agent_id in env.agents:
-        obs_dim = env.observation_space(agent_id).shape[0]
-        obs_dims[agent_id] = obs_dim 
-        goal_dims[agent_id] = 2 if "agent" in agent_id else 0  # good agent 有目标，adversary 没有
-        # print(f"[DEBUG] Agent {agent_id} obs_dim: {obs_dims[agent_id]}, goal_dim: {goal_dims[agent_id]}, act_dim: {act_dim}")
-    # 假设你已经有了 obs_dims 字典
-    total_obs_dim = sum([obs_dims[agent_id] for agent_id in env.agents])
-    all_obs_dims = [obs_dims[agent_id] for agent_id in env.agents]
-    all_goal_dims = [goal_dims[agent_id] for agent_id in env.agents]
-    # 初始化智能体
+
+    for agent_id in agent_ids:
+        raw_obs_dim = env.observation_space(agent_id).shape[0]
+
+        if use_encoder:
+            # 环境返回的 obs 包含 goal，需要手动分离
+            obs_dim = raw_obs_dim - 2  # 减去 goal 的维度
+            goal_dim = 2 if "agent" in agent_id or "good" in agent_id or "survivor" in agent_id else 0
+        else:
+            # baseline 模式下 obs 已经拼接
+            obs_dim = raw_obs_dim
+            goal_dim = 0
+
+        obs_dims[agent_id] = obs_dim
+        goal_dims[agent_id] = goal_dim
+        print(f"[Init Actor] Agent {agent_id} obs_dim={obs_dim}, goal_dim={goal_dim}")
+
+    total_obs_dim = sum(obs_dims.values())
+    all_obs_dims = [obs_dims[a] for a in agent_ids]   # ✅ 用固定 agent_ids
+    all_goal_dims = [goal_dims[a] for a in agent_ids] # ✅
+
     agents = []
-    for i, agent_id in enumerate(env.agents):
-        agent_obs_dim = obs_dims[agent_id]  # ✅
-        agent_goal_dim = goal_dims[agent_id]  # ✅
-        print(f"[Init Actor] Agent {agent_id} obs_dim={agent_obs_dim}, goal_dim={agent_goal_dim}")
+    for i, agent_id in enumerate(agent_ids):
         agents.append(
             MADDPGAgent(
                 agent_id=i,
-                obs_dim=agent_obs_dim,
-                goal_dim=agent_goal_dim,
+                obs_dim=obs_dims[agent_id],
+                goal_dim=goal_dims[agent_id],
                 act_dim=act_dim,
                 n_agents=n_agents,
                 latent_dim=latent_dim,
@@ -81,11 +91,12 @@ def main():
                 all_goal_dims=all_goal_dims,
             )
         )
+        print(f"🧠 [Agent {i}] using obs_dim={obs_dims[agent_id]}, encoder={use_encoder}")
+        print(f"🧠 [Agent {i}] actor type: {type(agents[-1].actor)}")
         # print(f"✅ Agent {agent_id}: obs_dim={obs_dims[agent_id]}, goal_dim={goal_dims[agent_id]}")
 
-    for i, agent_id in enumerate(env.agents):
-        print(f"Agent {agent_id} obs dim: {env.observation_space(agent_id).shape[0]}")
 
+    # === 5️⃣ 初始化 GAIL 判别器 ===
     max_obs = max(obs_dims.values())
     max_goal = max(goal_dims.values())
     # 初始化 GAIL 判别器（统一维度：最大 obs + goal + act）
@@ -96,10 +107,12 @@ def main():
             hidden_dim=hidden_dim,
             device=device
         )
+        env.unwrapped.scenario.gail_discriminator = gail_disc
+        env.unwrapped.scenario.use_gail = True
     else:
         gail_disc = None
 
-    # 初始化经验回放池（也用最大 obs + goal 维度）
+    # === 6️⃣ 初始化 ReplayBuffer ===
     buffer = ReplayBuffer(
         buffer_size=100_000,
         obs_dim=max_obs + max_goal,
@@ -109,6 +122,7 @@ def main():
         device=device
     )
 
+    # === 7️⃣ 初始化 Trainer ===
     writer_dir = os.path.join(args.logdir, f"maddpg_{args.method}")
     trainer = Trainer(
         env=env,
@@ -125,7 +139,8 @@ def main():
         obs_dim=max_obs,
         goal_dim=max_goal,
         tensorboard_logdir=writer_dir,
-        method=args.method
+        method=args.method,
+        max_episodes=args.episodes
     )
 
     trainer.run()

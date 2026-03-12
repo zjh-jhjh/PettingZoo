@@ -94,13 +94,29 @@ class MADDPGAgent:
         with torch.no_grad():
             next_actions = []
             for i, agent in enumerate(agent_list):
+                # ✅ 确保输入 obs/goal 都是二维张量 [B, dim]
+                obs_in = obs_next_i[i]
+                goal_in = goals_next_i[i]
+                if obs_in.dim() == 1:
+                    obs_in = obs_in.unsqueeze(0)
+                if goal_in.dim() == 1:
+                    goal_in = goal_in.unsqueeze(0)
+
+                # ✅ 调用 actor_target
                 if agent.use_encoder:
-                    next_action = agent.actor_target(obs_next_i[i], goals_next_i[i])
+                    next_action = agent.actor_target(obs_in, goal_in)
                 else:
-                    next_action = agent.actor_target(obs_next_i[i])
+                    next_action = agent.actor_target(obs_in)
+
+                # ✅ 保证输出动作也是 [B, act_dim]
+                if next_action.dim() == 1:
+                    next_action = next_action.unsqueeze(0)
+
                 next_actions.append(next_action)
 
-            # if self.use_encoder:
+
+
+        # if self.use_encoder:
             if isinstance(self.critic_target, CentralizedCritic):
                 q_next = self.critic_target(obs_next_i, goals_next_i, next_actions)
             else:
@@ -126,13 +142,22 @@ class MADDPGAgent:
         actions_pred = []
         for i in range(self.n_agents):
             if i == self.agent_id:
+                obs_in = obs_i[i]
+                goal_in = goals_i[i]
+                if obs_in.dim() == 1:
+                    obs_in = obs_in.unsqueeze(0)
+                if goal_in.dim() == 1:
+                    goal_in = goal_in.unsqueeze(0)
+
                 if self.use_encoder:
-                    action = self.actor(obs_i[i], goals_i[i])
+                    action = self.actor(obs_in, goal_in)
                 else:
-                    action = self.actor(obs_i[i])
+                    action = self.actor(obs_in)
                 actions_pred.append(action)
             else:
                 actions_pred.append(actions_i[i].detach())
+
+
 
         # if self.use_encoder:
         if isinstance(self.critic_target, CentralizedCritic):
